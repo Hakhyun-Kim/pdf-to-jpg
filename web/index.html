@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PDF → JPG 변환기</title>
+<meta name="description" content="PDF를 페이지별 JPG 이미지로 변환합니다. 파일은 서버로 전송되지 않고 브라우저 안에서만 처리됩니다.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📄</text></svg>">
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<style>
+  :root {
+    --bg: #f4f6fb;
+    --card: #ffffff;
+    --text: #1c2333;
+    --muted: #6b7280;
+    --accent: #2f6fed;
+    --accent-hover: #1d5ce0;
+    --border: #dfe3ec;
+    --drop-bg: #eef3ff;
+    --danger: #d64545;
+    --ok: #1f9d55;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151d;
+      --card: #1b2030;
+      --text: #e8ebf3;
+      --muted: #9aa3b5;
+      --accent: #5b8cff;
+      --accent-hover: #7aa2ff;
+      --border: #2c3446;
+      --drop-bg: #202a44;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: "Segoe UI", "Malgun Gothic", "Apple SD Gothic Neo", system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 24px 16px 48px; }
+  header { text-align: center; margin: 16px 0 24px; }
+  header h1 { font-size: 1.7rem; margin: 0 0 6px; }
+  header p { color: var(--muted); margin: 0; }
+  .privacy {
+    display: inline-block; margin-top: 10px; padding: 4px 12px;
+    background: var(--drop-bg); color: var(--accent);
+    border-radius: 999px; font-size: .82rem; font-weight: 600;
+  }
+  .card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 14px; padding: 20px; margin-bottom: 16px;
+  }
+  .card h2 { font-size: 1rem; margin: 0 0 12px; }
+  #dropzone {
+    border: 2px dashed var(--border); border-radius: 12px;
+    background: var(--drop-bg);
+    padding: 32px 16px; text-align: center; cursor: pointer;
+    transition: border-color .15s, background .15s;
+  }
+  #dropzone.dragover { border-color: var(--accent); filter: brightness(1.05); }
+  #dropzone .big { font-size: 2rem; }
+  #dropzone p { margin: 6px 0 0; color: var(--muted); font-size: .9rem; }
+  #filelist { list-style: none; margin: 12px 0 0; padding: 0; }
+  #filelist li {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px; border: 1px solid var(--border);
+    border-radius: 8px; margin-bottom: 6px; font-size: .9rem;
+  }
+  #filelist .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #filelist .size { color: var(--muted); font-size: .8rem; white-space: nowrap; }
+  #filelist button {
+    border: none; background: none; color: var(--danger);
+    cursor: pointer; font-size: 1rem; padding: 2px 6px;
+  }
+  .opts { display: flex; flex-wrap: wrap; gap: 16px 24px; align-items: center; }
+  .opt { display: flex; align-items: center; gap: 8px; font-size: .92rem; }
+  select, input[type="text"], input[type="number"] {
+    background: var(--card); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 6px 10px; font-size: .92rem;
+  }
+  input[type="range"] { accent-color: var(--accent); }
+  .hint { color: var(--muted); font-size: .8rem; }
+  .check { margin-top: 14px; font-size: .92rem; display: flex; align-items: center; gap: 8px; }
+  #convert {
+    width: 100%; padding: 14px; font-size: 1.05rem; font-weight: 700;
+    color: #fff; background: var(--accent); border: none; border-radius: 12px;
+    cursor: pointer; transition: background .15s;
+  }
+  #convert:hover:not(:disabled) { background: var(--accent-hover); }
+  #convert:disabled { opacity: .55; cursor: not-allowed; }
+  #bar-outer {
+    height: 10px; background: var(--drop-bg); border-radius: 999px;
+    margin-top: 14px; overflow: hidden;
+  }
+  #bar { height: 100%; width: 0; background: var(--accent); border-radius: 999px; transition: width .2s; }
+  #status { margin-top: 10px; font-size: .9rem; color: var(--muted); min-height: 1.4em; }
+  #status.ok { color: var(--ok); }
+  #status.err { color: var(--danger); }
+  footer { text-align: center; color: var(--muted); font-size: .84rem; margin-top: 28px; }
+  footer a { color: var(--accent); text-decoration: none; }
+  footer a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>📄 PDF → JPG 변환기</h1>
+    <p>PDF 파일을 페이지별 JPG 이미지로 변환합니다.</p>
+    <span class="privacy">🔒 파일은 서버로 전송되지 않아요 — 모든 변환은 내 브라우저 안에서 처리됩니다</span>
+  </header>
+
+  <div class="card">
+    <h2>1. PDF 파일</h2>
+    <div id="dropzone">
+      <div class="big">📂</div>
+      <strong>여기를 클릭하거나 PDF를 끌어다 놓으세요</strong>
+      <p>여러 개를 한 번에 넣어도 됩니다</p>
+    </div>
+    <input type="file" id="fileinput" accept=".pdf,application/pdf" multiple hidden>
+    <ul id="filelist"></ul>
+  </div>
+
+  <div class="card">
+    <h2>2. 옵션</h2>
+    <div class="opts">
+      <label class="opt">해상도(DPI)
+        <select id="dpi">
+          <option>72</option><option>100</option><option>150</option>
+          <option selected>200</option><option>300</option><option>600</option>
+        </select>
+      </label>
+      <label class="opt">JPG 품질
+        <input type="range" id="quality" min="10" max="100" step="5" value="90">
+        <span id="quality-val">90</span>
+      </label>
+      <label class="opt">페이지
+        <input type="text" id="pages" placeholder="예: 1-3,5" size="10">
+        <span class="hint">비우면 전체</span>
+      </label>
+    </div>
+    <label class="check">
+      <input type="checkbox" id="subfolder" checked>
+      PDF마다 하위 폴더를 만들어 저장 (ZIP 내부)
+    </label>
+  </div>
+
+  <div class="card">
+    <button id="convert">변환 시작</button>
+    <div id="bar-outer"><div id="bar"></div></div>
+    <div id="status">PDF 파일을 추가한 뒤 [변환 시작]을 누르세요.</div>
+  </div>
+
+  <footer>
+    <a href="https://github.com/Hakhyun-Kim/pdf-to-jpg" target="_blank" rel="noopener">GitHub</a> ·
+    <a href="https://github.com/Hakhyun-Kim/pdf-to-jpg/releases/latest" target="_blank" rel="noopener">데스크톱 버전 다운로드</a> ·
+    MIT License
+  </footer>
+</div>
+
+<script type="module">
+import * as pdfjsLib from "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.min.mjs";
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+  "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.worker.min.mjs";
+
+const $ = (id) => document.getElementById(id);
+const dropzone = $("dropzone");
+const fileinput = $("fileinput");
+const filelist = $("filelist");
+const btn = $("convert");
+const bar = $("bar");
+const statusEl = $("status");
+
+let files = []; // File[]
+let converting = false;
+
+$("quality").addEventListener("input", () => {
+  $("quality-val").textContent = $("quality").value;
+});
+
+// ── 파일 목록 ─────────────────────────────────────────
+function addFiles(list) {
+  for (const f of list) {
+    if (!f.name.toLowerCase().endsWith(".pdf")) continue;
+    if (files.some((x) => x.name === f.name && x.size === f.size)) continue;
+    files.push(f);
+  }
+  renderList();
+}
+
+function renderList() {
+  filelist.innerHTML = "";
+  files.forEach((f, i) => {
+    const li = document.createElement("li");
+    const name = document.createElement("span");
+    name.className = "name";
+    name.textContent = "📄 " + f.name;
+    const size = document.createElement("span");
+    size.className = "size";
+    size.textContent = fmtSize(f.size);
+    const rm = document.createElement("button");
+    rm.textContent = "✕";
+    rm.title = "제거";
+    rm.addEventListener("click", () => { files.splice(i, 1); renderList(); });
+    li.append(name, size, rm);
+    filelist.appendChild(li);
+  });
+}
+
+function fmtSize(n) {
+  if (n < 1024 * 1024) return (n / 1024).toFixed(0) + " KB";
+  return (n / 1024 / 1024).toFixed(1) + " MB";
+}
+
+dropzone.addEventListener("click", () => fileinput.click());
+fileinput.addEventListener("change", () => { addFiles(fileinput.files); fileinput.value = ""; });
+["dragover", "dragenter"].forEach((ev) =>
+  dropzone.addEventListener(ev, (e) => { e.preventDefault(); dropzone.classList.add("dragover"); }));
+["dragleave", "drop"].forEach((ev) =>
+  dropzone.addEventListener(ev, (e) => { e.preventDefault(); dropzone.classList.remove("dragover"); }));
+dropzone.addEventListener("drop", (e) => addFiles(e.dataTransfer.files));
+
+// ── 페이지 범위 파싱 (데스크톱 버전과 동일 규칙) ────────
+function parsePageRange(text, pageCount) {
+  text = text.trim();
+  if (!text) return Array.from({ length: pageCount }, (_, i) => i);
+  const pages = new Set();
+  for (let part of text.split(",")) {
+    part = part.trim();
+    if (!part) continue;
+    let start, end;
+    const m = part.match(/^(\d+)\s*-\s*(\d+)$/);
+    if (m) {
+      start = parseInt(m[1], 10); end = parseInt(m[2], 10);
+    } else if (/^\d+$/.test(part)) {
+      start = end = parseInt(part, 10);
+    } else {
+      throw new Error(`페이지 범위 형식이 잘못되었습니다: '${part}'`);
+    }
+    if (start < 1 || end < start)
+      throw new Error(`페이지 범위가 올바르지 않습니다: '${part}'`);
+    for (let p = start; p <= end && p <= pageCount; p++) pages.add(p - 1);
+  }
+  if (pages.size === 0) throw new Error("지정한 페이지가 문서 범위를 벗어났습니다.");
+  return [...pages].sort((a, b) => a - b);
+}
+
+// ── 변환 ─────────────────────────────────────────────
+function setStatus(msg, cls = "") {
+  statusEl.textContent = msg;
+  statusEl.className = cls;
+}
+
+function canvasToJpeg(canvas, quality) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error("이미지 생성에 실패했습니다. DPI를 낮춰 보세요."));
+    }, "image/jpeg", quality / 100);
+  });
+}
+
+function download(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+btn.addEventListener("click", async () => {
+  if (converting) return;
+  if (files.length === 0) {
+    setStatus("변환할 PDF 파일을 먼저 추가하세요.", "err");
+    return;
+  }
+  const dpi = parseInt($("dpi").value, 10);
+  const quality = parseInt($("quality").value, 10);
+  const pageRange = $("pages").value;
+  const subfolder = $("subfolder").checked;
+
+  converting = true;
+  btn.disabled = true;
+  bar.style.width = "0%";
+
+  const zip = new JSZip();
+  const errors = [];
+  const usedStems = new Map(); // 같은 이름의 PDF가 있으면 (2), (3)… 붙임
+  let totalImages = 0;
+  let lastBlob = null, lastName = null;
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d", { willReadFrequently: false });
+
+  try {
+    for (let fi = 0; fi < files.length; fi++) {
+      const file = files[fi];
+      setStatus(`[${fi + 1}/${files.length}] ${file.name} 변환 중...`);
+      let doc = null;
+      try {
+        const data = await file.arrayBuffer();
+        doc = await pdfjsLib.getDocument({ data }).promise;
+        const indices = parsePageRange(pageRange, doc.numPages);
+        const digits = Math.max(3, String(doc.numPages).length);
+
+        let stem = file.name.replace(/\.pdf$/i, "");
+        const n = (usedStems.get(stem) || 0) + 1;
+        usedStems.set(stem, n);
+        if (n > 1) stem = `${stem} (${n})`;
+
+        for (let k = 0; k < indices.length; k++) {
+          const page = await doc.getPage(indices[k] + 1);
+          const viewport = page.getViewport({ scale: dpi / 72 });
+          canvas.width = Math.ceil(viewport.width);
+          canvas.height = Math.ceil(viewport.height);
+          ctx.fillStyle = "#ffffff";
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          // intent:"print" — rAF 대신 Promise로 스케줄링되어 백그라운드 탭에서도 멈추지 않음
+          await page.render({ canvasContext: ctx, viewport, intent: "print" }).promise;
+          page.cleanup();
+
+          const blob = await canvasToJpeg(canvas, quality);
+          const jpgName = `${stem}_${String(indices[k] + 1).padStart(digits, "0")}.jpg`;
+          zip.file(subfolder ? `${stem}/${jpgName}` : jpgName, blob);
+          totalImages++;
+          lastBlob = blob;
+          lastName = jpgName;
+
+          const overall = ((fi + (k + 1) / indices.length) / files.length) * 95;
+          bar.style.width = overall.toFixed(1) + "%";
+        }
+      } catch (e) {
+        errors.push(`${file.name}: ${e.message || e}`);
+      } finally {
+        if (doc) doc.destroy();
+      }
+    }
+
+    if (totalImages === 1) {
+      download(lastBlob, lastName);
+    } else if (totalImages > 1) {
+      setStatus("ZIP 파일 만드는 중...");
+      const zipBlob = await zip.generateAsync(
+        { type: "blob", compression: "STORE" },
+        (meta) => { bar.style.width = (95 + meta.percent * 0.05).toFixed(1) + "%"; }
+      );
+      const zipName = files.length === 1
+        ? files[0].name.replace(/\.pdf$/i, "") + "_JPG.zip"
+        : "PDF-to-JPG.zip";
+      download(zipBlob, zipName);
+    }
+
+    bar.style.width = totalImages ? "100%" : "0%";
+    if (errors.length) {
+      setStatus(`완료: JPG ${totalImages}장 저장, 오류 ${errors.length}건 — ${errors.join(" / ")}`, "err");
+    } else if (totalImages) {
+      setStatus(`완료! JPG ${totalImages}장이 다운로드되었습니다.`, "ok");
+    } else {
+      setStatus("저장된 파일이 없습니다.", "err");
+    }
+  } finally {
+    converting = false;
+    btn.disabled = false;
+    canvas.width = canvas.height = 0;
+  }
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,88 @@
+name: Build Installers
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build (${{ matrix.artifact }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: PDF-to-JPG-Windows
+          - os: macos-latest
+            artifact: PDF-to-JPG-macOS-AppleSilicon
+          - os: macos-15-intel
+            artifact: PDF-to-JPG-macOS-Intel
+          - os: ubuntu-latest
+            artifact: PDF-to-JPG-Linux
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python (Windows/macOS)
+        if: runner.os != 'Linux'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Linux는 tkinter가 포함된 시스템 파이썬을 사용한다
+      - name: Set up Python (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-tk python-is-python3
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          EXTRA=""
+          if [ "$RUNNER_OS" = "Linux" ]; then EXTRA="--break-system-packages"; fi
+          python -m pip install $EXTRA pymupdf tkinterdnd2 pyinstaller
+
+      - name: Build with PyInstaller
+        shell: bash
+        run: |
+          python -m PyInstaller --noconfirm --onefile --windowed \
+            --name PDF-to-JPG --collect-all tkinterdnd2 pdf_to_jpg.py
+
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p release
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            mv dist/PDF-to-JPG.exe "release/${{ matrix.artifact }}.exe"
+          elif [ "$RUNNER_OS" = "macOS" ]; then
+            ditto -c -k --keepParent dist/PDF-to-JPG.app "release/${{ matrix.artifact }}.zip"
+          else
+            chmod +x dist/PDF-to-JPG
+            tar -C dist -czf "release/${{ matrix.artifact }}.tar.gz" PDF-to-JPG
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: release/*
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
