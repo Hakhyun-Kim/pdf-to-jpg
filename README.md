@@ -8,6 +8,10 @@ PDF 파일을 페이지별 JPG 이미지로 변환하는 프로그램입니다. 
 
 A simple tool that converts PDF pages into JPG images. Available as a web app and a desktop GUI (Python + tkinter + PyMuPDF).
 
+<p align="center">
+  <img src="docs/screenshot-desktop.png" alt="PDF → JPG 변환기 데스크톱 앱 스크린샷" width="600">
+</p>
+
 ## 🌐 웹에서 바로 사용 (설치 불필요)
 
 **→ https://hakhyun-kim.github.io/pdf-to-jpg/**
